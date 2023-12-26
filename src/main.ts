@@ -7,7 +7,7 @@ import ffmpeg from "fluent-ffmpeg";
 const userId = "83050000"; // 限界園児
 
 // 動画を出力するディレクトリ
-const dir = "videos"
+const dir = "output";
 
 const main = () => {
   Process.run();
@@ -17,12 +17,15 @@ namespace Process {
   export async function run() {
     let lastLvID: string | undefined = undefined;
     console.log('================START================');
+    console.log(now(), '新しい配信をチェック');
 
-    console.log('新しい配信をチェック')
-
-    const lvID = await checkLiveAndRecord(lvID => lvID !== lastLvID);
-    if (lvID) {
-      lastLvID = lvID;
+    try {
+      const lvID = await checkLiveAndRecord(lvID => lvID !== lastLvID);
+      if (lvID) {
+        lastLvID = lvID;
+      }
+    } catch (e) {
+      console.warn(e);
     }
 
     console.log('=================END=================');
@@ -30,58 +33,58 @@ namespace Process {
     await wait(5 * 60 * 1000);
     await run();
   }
-}
 
-const checkLiveAndRecord = async (isNewLvID: (lastLvID: string | undefined) => boolean): Promise<string | undefined> => {
-  const baseUrl = "https://www.nicovideo.jp/user/";
+  const checkLiveAndRecord = async (isNewLvID: (lastLvID: string | undefined) => boolean): Promise<string | undefined> => {
+    const baseUrl = "https://www.nicovideo.jp/user/";
 
-  const browser = await puppeteer.use(StealthPlugin()).launch();
-  const page = await browser.newPage();
-  await page.goto(baseUrl + userId);
+    const browser = await puppeteer.use(StealthPlugin()).launch();
+    const page = await browser.newPage();
+    await page.goto(baseUrl + userId);
 
-  const lastLvLink = (await page.$$('article.NicorepoItem-item > div.NicorepoItem-body > a'))?.[0];
-  const lastLvUrl = await lastLvLink?.evaluate(e => e.href);
-  const lastLvID = lastLvUrl?.match(/lv\d+/)?.[0];
-  if (!isNewLvID(lastLvID)) {
-    // 新しい配信が見つからなかった場合ブラウザを閉じて終了
+    const lastLvLink = (await page.$$('article.NicorepoItem-item > div.NicorepoItem-body > a'))?.[0];
+    const lastLvUrl = await lastLvLink?.evaluate(e => e.href);
+    const lastLvID = lastLvUrl?.match(/lv\d+/)?.[0];
+    if (!isNewLvID(lastLvID)) {
+      // 新しい配信が見つからなかった場合ブラウザを閉じて終了
+      await browser.close();
+      return lastLvID;
+    }
+    console.log('LvID:', lastLvID);
+
+    let isRecording = false;
+
+    page.on("response", async (response): Promise<void> => {
+      const url = response.url();
+      const headers = response.headers();
+
+      if (headers["content-type"] === "application/vnd.apple.mpegurl" && url.includes("playlist.m3u8")) {
+        if (isRecording) return;
+        console.log(url, headers);
+        const text = await response.text();
+        console.log(text);
+
+        saveToMp4(url, path.join(dir, `${lastLvID}.mp4`), () => { isRecording = false });
+        isRecording = true;
+
+        console.log("新しい配信が見つかりました。");
+      }
+    });
+    // 新しい配信が見つかった場合配信ページに飛んで録画を開始
+    await lastLvLink.click();
+
+    await wait(60 * 1000, () => isRecording);
+
+    // 録画が終了したらブラウザを閉じる
     await browser.close();
+
     return lastLvID;
   }
-  console.log('lv:', lastLvID);
-
-  let isRecording = false;
-
-  page.on("response", async (response): Promise<void> => {
-    const url = response.url();
-    const headers = response.headers();
-
-    if (headers["content-type"] === "application/vnd.apple.mpegurl" && url.includes("playlist.m3u8")) {
-      if (isRecording) return;
-      console.log(url, headers);
-      const text = await response.text();
-      console.log(text);
-
-      saveToMp4(url, path.join(dir, `${lastLvID}.mp4`), () => { isRecording = false });
-      isRecording = true;
-
-      console.log("新しい配信が見つかりました。")
-    }
-  });
-  // 新しい配信が見つかった場合配信ページに飛んで録画を開始
-  await lastLvLink.click();
-
-  await wait(60 * 1000, () => isRecording);
-
-  // 録画が終了したらブラウザを閉じる
-  await browser.close();
-
-  return lastLvID;
 }
 
-const wait = (interval: number, isRecording?: () => boolean) => new Promise<void>(resolve => {
+const wait = (interval: number, continuous?: () => boolean) => new Promise<void>(resolve => {
   const loop = () => {
     setTimeout(() => {
-      isRecording?.() ? loop() : resolve();
+      continuous?.() ? loop() : resolve();
     }, interval);
   }
   loop();
@@ -93,7 +96,6 @@ const saveToMp4 = (source: string, output: string, onComplete?: () => void) => {
     .videoCodec('copy') // ビデオコーデックをコピー
     .audioCodec('copy') // オーディオコーデックをコピー
     .outputOptions('-bsf:a', 'aac_adtstoasc') // オーディオビットストリームフィルタ
-    // .duration(30)
     .on('end', () => {
       console.info("録画終了 🎉");
       onComplete?.();
@@ -109,6 +111,19 @@ const saveToMp4 = (source: string, output: string, onComplete?: () => void) => {
       onComplete?.();
     })
     .run()
+}
+
+const now = () => {
+  const date = new Date();
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Tokyo'
+  }).format(date);
 }
 
 namespace Logger {
