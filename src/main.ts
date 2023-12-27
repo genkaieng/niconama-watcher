@@ -14,8 +14,9 @@ const main = () => {
 }
 
 namespace Process {
+  let lastLvID: string | undefined = undefined;
+
   export async function run() {
-    let lastLvID: string | undefined = undefined;
     console.log('================START================');
     console.log(now(), '新しい配信をチェック');
 
@@ -34,7 +35,7 @@ namespace Process {
     await run();
   }
 
-  const checkLiveAndRecord = async (isNewLvID: (lastLvID: string | undefined) => boolean): Promise<string | undefined> => {
+  const checkLiveAndRecord = async (isNewLvID: (lastLvID: string) => boolean): Promise<string | undefined> => {
     const baseUrl = "https://www.nicovideo.jp/user/";
 
     const browser = await puppeteer.use(StealthPlugin()).launch();
@@ -44,10 +45,10 @@ namespace Process {
     const lastLvLink = (await page.$$('article.NicorepoItem-item > div.NicorepoItem-body > a'))?.[0];
     const lastLvUrl = await lastLvLink?.evaluate(e => e.href);
     const lastLvID = lastLvUrl?.match(/lv\d+/)?.[0];
-    if (!isNewLvID(lastLvID)) {
+    if (!lastLvID || !isNewLvID(lastLvID)) {
       // 新しい配信が見つからなかった場合ブラウザを閉じて終了
       await browser.close();
-      return lastLvID;
+      return;
     }
     console.log('LvID:', lastLvID);
 
